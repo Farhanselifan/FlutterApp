@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'dart:math';
+import 'package:mqtt_client/mqtt_client.dart';
+import 'package:mqtt_client/mqtt_server_client.dart';
+import 'dart:developer' as developer;
 
 void main() {
   runApp(const MyApp());
@@ -26,17 +28,23 @@ class TrashClassificationScreen extends StatefulWidget {
   const TrashClassificationScreen({Key? key}) : super(key: key);
 
   @override
-  State<TrashClassificationScreen> createState() => _TrashClassificationScreenState();
+  State<TrashClassificationScreen> createState() =>
+      _TrashClassificationScreenState();
 }
 
 class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
+  MqttServerClient? client;
+  String connectionStatus = '🔌 Not Connected';
+  bool isConnecting = false;
+  String detectedType = 'Menunggu data...';
+
   int bateraiCount = 0;
   int kertasCount = 0;
   int plastikCount = 0;
-  
-  String currentTrashType = 'Plastik';
-  IconData currentIcon = Icons.eco;
-  Color currentIconColor = Colors.teal;
+
+  String currentTrashType = 'Menunggu data...';
+  IconData currentIcon = Icons.hourglass_empty;
+  Color currentIconColor = Colors.grey;
 
   final List<Map<String, dynamic>> trashTypes = [
     {
@@ -56,38 +64,151 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
     },
   ];
 
-  void classifyTrash() {
+  // ===================== MQTT SETUP =====================
+  Future<void> connectToMQTT() async {
+    if (isConnecting) return; // prevent double tap
+    
     setState(() {
-      // Randomly select a trash type
-      final random = Random();
-      final selectedTrash = trashTypes[random.nextInt(trashTypes.length)];
+      isConnecting = true;
+      connectionStatus = '⏳ Connecting...';
+    });
+
+    try {
+      client = MqttServerClient('test.mosquitto.org', '');
+      client!.port = 1883;
+      client!.logging(on: false);
+      client!.keepAlivePeriod = 20;
+      client!.autoReconnect = true;
+
+      client!.onConnected = () {
+        setState(() {
+          connectionStatus = '✅ Connected to MQTT';
+          isConnecting = false;
+        });
+        print('✅ MQTT Connected');
+      };
+
+      client!.onDisconnected = () {
+        setState(() {
+          connectionStatus = '❌ Disconnected';
+          isConnecting = false;
+        });
+        print('❌ MQTT Disconnected');
+      };
+
+      client!.onSubscribed = (String topic) {
+        print('📡 Subscribed to: $topic');
+      };
+
+      final connMessage = MqttConnectMessage()
+          .withClientIdentifier(
+              'flutter_client_${DateTime.now().millisecondsSinceEpoch}')
+          .startClean()
+          .withWillQos(MqttQos.atLeastOnce);
       
-      currentTrashType = selectedTrash['name'];
-      currentIcon = selectedTrash['icon'];
-      currentIconColor = selectedTrash['color'];
+      client!.connectionMessage = connMessage;
+
+      await client!.connect();
+
+      if (client!.connectionStatus?.state == MqttConnectionState.connected) {
+        setState(() {
+          connectionStatus = '✅ Connected to MQTT';
+          isConnecting = false;
+        });
+
+        // Subscribe to topic
+        client!.subscribe('smartbin/detection', MqttQos.atMostOnce);
+
+        // Listen for messages
+        client!.updates?.listen((List<MqttReceivedMessage<MqttMessage?>>? c) {
+          final recMess = c![0].payload as MqttPublishMessage;
+          final message =
+              MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
+
+          setState(() {
+            detectedType = message;
+            updateFromIoT(message);
+          });
+
+          print('📩 Message received: $message');
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ Terhubung ke MQTT broker'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        throw Exception('Connection failed');
+      }
+    } catch (e) {
+      setState(() {
+        connectionStatus = '⚠️ Connection failed';
+        isConnecting = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal terhubung: $e'),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+
+      client?.disconnect();
+      print('❌ MQTT Connection error: $e');
+    }
+  }
+
+  // Update UI when MQTT message received
+  void updateFromIoT(String message) {
+    final trash = trashTypes.firstWhere(
+      (t) => t['name'].toLowerCase() == message.trim().toLowerCase(),
+      orElse: () => {
+        'name': 'Tidak dikenali',
+        'icon': Icons.help_outline,
+        'color': Colors.grey,
+      },
+    );
+
+    setState(() {
+      currentTrashType = trash['name'];
+      currentIcon = trash['icon'];
+      currentIconColor = trash['color'];
+
+      String normalizedMessage = message.trim().toLowerCase();
       
-      // Increment the appropriate counter
-      switch (currentTrashType) {
-        case 'Plastik':
-          plastikCount++;
-          break;
-        case 'Baterai':
-          bateraiCount++;
-          break;
-        case 'Kertas':
-          kertasCount++;
-          break;
+      if (normalizedMessage == 'baterai') {
+        bateraiCount++;
+      } else if (normalizedMessage == 'kertas') {
+        kertasCount++;
+      } else if (normalizedMessage == 'plastik') {
+        plastikCount++;
       }
     });
 
-    // Show a snackbar with the result
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Terdeteksi: $currentTrashType'),
-        duration: const Duration(seconds: 2),
-        backgroundColor: currentIconColor,
-      ),
-    );
+    // Show notification
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Terdeteksi: ${trash['name']}'),
+          duration: const Duration(seconds: 2),
+          backgroundColor: trash['color'],
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    client?.disconnect();
+    super.dispose();
   }
 
   @override
@@ -97,16 +218,12 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Header
+            // HEADER
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Row(
                 children: [
-                  const Icon(
-                    Icons.recycling,
-                    color: Colors.teal,
-                    size: 32,
-                  ),
+                  const Icon(Icons.recycling, color: Colors.teal, size: 32),
                   const SizedBox(width: 8),
                   const Text(
                     'TRASH CLASSIFICATION',
@@ -118,24 +235,49 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
                     ),
                   ),
                   const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.menu, color: Colors.black87),
-                    onPressed: () {},
+                  ElevatedButton(
+                    onPressed: isConnecting ? null : connectToMQTT,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isConnecting 
+                          ? Colors.grey 
+                          : (connectionStatus.contains('Connected') 
+                              ? Colors.green 
+                              : Colors.blueAccent),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 10),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                    ),
+                    child: Text(
+                      isConnecting ? 'Connecting...' : 'Connect',
+                      style: const TextStyle(fontSize: 13, color: Colors.white),
+                    ),
                   ),
                 ],
               ),
             ),
 
-            // Main Content
+            // CONNECTION STATUS
+            Text(
+              connectionStatus,
+              style: const TextStyle(
+                fontSize: 12,
+                color: Colors.black54,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // MAIN CONTENT
             Expanded(
               child: Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // Animated Plant/Trash Image
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 300),
-                      transitionBuilder: (Widget child, Animation<double> animation) {
+                      transitionBuilder:
+                          (Widget child, Animation<double> animation) {
                         return ScaleTransition(scale: animation, child: child);
                       },
                       child: Container(
@@ -156,14 +298,9 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
                       ),
                     ),
                     const SizedBox(height: 40),
-
-                    // Text
                     const Text(
                       'Jenis sampah',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
-                      ),
+                      style: TextStyle(fontSize: 14, color: Colors.black54),
                     ),
                     const SizedBox(height: 8),
                     AnimatedSwitcher(
@@ -178,66 +315,37 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 24),
-
-                    // Start Button
-                    ElevatedButton(
-                      onPressed: classifyTrash,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00A67E),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 48,
-                          vertical: 14,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        elevation: 2,
-                      ),
-                      child: const Text(
-                        'Start',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Subtitle
-                    const Text(
-                      'History jenis sampah',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.black54,
-                      ),
-                    ),
                   ],
                 ),
               ),
             ),
 
-            // Bottom Cards
+            // STATISTICS
             Padding(
               padding: const EdgeInsets.all(24.0),
               child: Row(
                 children: [
                   Expanded(
                     child: _buildStatCard(
-                      context,
                       bateraiCount.toString(),
                       'Baterai',
                       const Color(0xFFB8E6D5),
                     ),
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: _buildStatCard(
-                      context,
                       kertasCount.toString(),
                       'Kertas',
                       const Color(0xFFE8F5B8),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildStatCard(
+                      plastikCount.toString(),
+                      'Plastik',
+                      const Color(0xFFE0F7FA),
                     ),
                   ),
                 ],
@@ -249,14 +357,9 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
     );
   }
 
-  Widget _buildStatCard(
-    BuildContext context,
-    String count,
-    String label,
-    Color color,
-  ) {
+  Widget _buildStatCard(String count, String label, Color color) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 12),
       decoration: BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(16),
@@ -277,7 +380,7 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
             },
             child: Text(
               count,
-              key: ValueKey<String>(count),
+              key: ValueKey<String>(count + label),
               style: const TextStyle(
                 fontSize: 32,
                 fontWeight: FontWeight.bold,
@@ -289,7 +392,7 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
           Text(
             label,
             style: const TextStyle(
-              fontSize: 14,
+              fontSize: 12,
               color: Colors.black87,
             ),
           ),
