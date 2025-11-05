@@ -37,9 +37,9 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
   bool isConnecting = false;
   String detectedType = 'Menunggu data...';
 
-  int bateraiCount = 0;
-  int kertasCount = 0;
-  int plastikCount = 0;
+  int OrganikCount = 0;
+  int AnorganikCount = 0;
+  
 
   String currentTrashType = 'Menunggu data...';
   IconData currentIcon = Icons.hourglass_empty;
@@ -47,17 +47,12 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
 
   final List<Map<String, dynamic>> trashTypes = [
     {
-      'name': 'Plastik',
-      'icon': Icons.eco,
-      'color': Colors.teal,
-    },
-    {
-      'name': 'Baterai',
+      'name': 'Organik',
       'icon': Icons.battery_charging_full,
       'color': Colors.orange,
     },
     {
-      'name': 'Kertas',
+      'name': 'Anorganik',
       'icon': Icons.article,
       'color': Colors.brown,
     },
@@ -183,13 +178,11 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
 
       String normalizedMessage = message.trim().toLowerCase();
       
-      if (normalizedMessage == 'baterai') {
-        bateraiCount++;
-      } else if (normalizedMessage == 'kertas') {
-        kertasCount++;
-      } else if (normalizedMessage == 'plastik') {
-        plastikCount++;
-      }
+      if (normalizedMessage == 'Organik') {
+        OrganikCount++;
+      } else if (normalizedMessage == 'Anorganik') {
+        AnorganikCount++;
+      } 
     });
 
     // Show notification
@@ -326,25 +319,17 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
                 children: [
                   Expanded(
                     child: _buildStatCard(
-                      bateraiCount.toString(),
-                      'Baterai',
+                      OrganikCount.toString(),
+                      'Organik',
                       const Color(0xFFB8E6D5),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildStatCard(
-                      kertasCount.toString(),
-                      'Kertas',
+                      AnorganikCount.toString(),
+                      'Anorganik',
                       const Color(0xFFE8F5B8),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildStatCard(
-                      plastikCount.toString(),
-                      'Plastik',
-                      const Color(0xFFE0F7FA),
                     ),
                   ),
                 ],
