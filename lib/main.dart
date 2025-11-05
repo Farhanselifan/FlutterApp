@@ -28,8 +28,7 @@ class TrashClassificationScreen extends StatefulWidget {
   const TrashClassificationScreen({Key? key}) : super(key: key);
 
   @override
-  State<TrashClassificationScreen> createState() =>
-      _TrashClassificationScreenState();
+  State<TrashClassificationScreen> createState() => _TrashClassificationScreenState();
 }
 
 class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
