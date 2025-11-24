@@ -68,7 +68,7 @@ class _TrashClassificationScreenState extends State<TrashClassificationScreen> {
     });
 
     try {
-      client = MqttServerClient('test.mosquitto.org', '');
+      client = MqttServerClient('10.71.26.87', '');
       client!.port = 1883;
       client!.logging(on: false);
       client!.keepAlivePeriod = 20;
